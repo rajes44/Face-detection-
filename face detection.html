@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FACEMARK // Liveness Attendance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/ort.min.js"></script>
+<style>
+:root{
+  --bg:#020609; --panel:rgba(3,12,18,.82); --line:#0c3347; --g:#18c8ff; --g2:#0a8fc0;
+  --cy:#b36bff; --am:#ffc400; --rd:#ff3b5c; --tx:#c6efff; --mut:#4f8399;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 var(--mono)}
+#rain{position:fixed;inset:0;width:100%;height:100%;z-index:0;opacity:.28;pointer-events:none}
+body::after{content:"";position:fixed;inset:0;z-index:5;pointer-events:none;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px);mix-blend-mode:multiply}
+.wrap{position:relative;z-index:2;max-width:1180px;margin:0 auto;padding:18px}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;
+  border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:18px}
+h1{margin:0;font-size:clamp(1.5rem,4.5vw,2.5rem);font-weight:800;letter-spacing:.04em;color:var(--g);
+  text-shadow:0 0 14px rgba(24,200,255,.55);position:relative}
+h1 small{display:block;font-size:.72rem;font-weight:400;color:var(--mut);letter-spacing:.12em;text-shadow:none;margin-top:2px}
+h1::before,h1::after{content:attr(data-t);position:absolute;left:0;top:0;opacity:0}
+h1:hover::before{opacity:.8;color:var(--rd);transform:translate(-2px,1px);clip-path:inset(0 0 55% 0)}
+h1:hover::after{opacity:.8;color:var(--cy);transform:translate(2px,-1px);clip-path:inset(50% 0 0 0)}
+.hud{display:flex;gap:10px;flex-wrap:wrap}
+.pill{border:1px solid var(--line);background:var(--panel);padding:4px 10px;font-size:.78rem;color:var(--mut)}
+.pill b{color:var(--g);font-weight:600}
+.pill.bad b{color:var(--rd)}
+main{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:18px}
+@media(max-width:860px){main{grid-template-columns:1fr}.wrap{padding:12px}}
+.box{background:var(--panel);border:1px solid var(--line);padding:14px;position:relative;backdrop-filter:blur(3px)}
+.box::before,.box::after{content:"";position:absolute;width:12px;height:12px;border:2px solid var(--g)}
+.box::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
+.box::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
+.box h2{margin:0 0 10px;font-size:.82rem;font-weight:600;letter-spacing:.14em;color:var(--g)}
+.box h2::before{content:"> ";color:var(--g2)}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+button{font:600 .8rem var(--mono);letter-spacing:.06em;cursor:pointer;color:var(--g);background:transparent;
+  border:1px solid var(--g2);padding:9px 14px;transition:.15s}
+button:hover:not(:disabled){background:var(--g);color:#001520;box-shadow:0 0 16px rgba(24,200,255,.5)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--cy);outline-offset:2px}
+button.on{background:var(--g);color:#001520}
+button:disabled{opacity:.35;cursor:not-allowed}
+button.danger{color:var(--rd);border-color:var(--rd)}
+button.danger:hover:not(:disabled){background:var(--rd);color:#1a0006;box-shadow:0 0 16px rgba(255,59,92,.5)}
+.stage{position:relative;aspect-ratio:4/3;background:#000;overflow:hidden;border:1px solid var(--line)}
+video,#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+video{filter:grayscale(.55) contrast(1.1) sepia(.2) hue-rotate(150deg) saturate(1.6)}
+.sweep{position:absolute;left:0;right:0;height:3px;top:0;background:linear-gradient(90deg,transparent,var(--g),transparent);
+  box-shadow:0 0 18px 4px rgba(24,200,255,.45);animation:sweep 3s linear infinite;opacity:.7}
+@keyframes sweep{from{top:0}to{top:100%}}
+.idle-msg{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--mut);padding:20px}
+.corner{position:absolute;width:26px;height:26px;border:2px solid var(--g)}
+.c1{top:8px;left:8px;border-right:0;border-bottom:0}.c2{top:8px;right:8px;border-left:0;border-bottom:0}
+.c3{bottom:8px;left:8px;border-right:0;border-top:0}.c4{bottom:8px;right:8px;border-left:0;border-top:0}
+#banner{margin-top:12px;padding:10px 12px;border:1px solid var(--line);font-weight:800;letter-spacing:.12em;
+  text-align:center;font-size:1.02rem;color:var(--mut)}
+#banner[data-s=ok]{color:#001520;background:var(--g);box-shadow:0 0 22px rgba(24,200,255,.55)}
+#banner[data-s=live]{color:var(--cy);border-color:var(--cy);box-shadow:0 0 14px rgba(179,107,255,.3) inset}
+#banner[data-s=warn]{color:var(--am);border-color:var(--am)}
+#banner[data-s=bad]{color:#fff;background:var(--rd);animation:shake .35s 2;box-shadow:0 0 22px rgba(255,59,92,.6)}
+@keyframes shake{25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+.steps{display:flex;gap:6px;margin-top:8px}
+.steps i{flex:1;height:6px;background:#0a1e2a;border:1px solid var(--line)}
+.steps i.done{background:var(--g);box-shadow:0 0 8px var(--g)}
+.steps i.act{background:var(--cy);box-shadow:0 0 8px var(--cy)}
+#timebar{height:3px;background:var(--cy);width:0;margin-top:6px;box-shadow:0 0 8px var(--cy)}
+.row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.row input{flex:1;min-width:150px}
+input[type=text]{font:inherit;color:var(--g);background:#01080c;border:1px solid var(--g2);padding:9px 12px;caret-color:var(--g)}
+input::placeholder{color:var(--mut)}
+.note{color:var(--mut);font-size:.78rem;margin-top:8px}
+.side{display:flex;flex-direction:column;gap:18px}
+#term{height:200px;overflow-y:auto;font-size:.78rem;background:#01060a;border:1px solid var(--line);padding:8px}
+#term div{white-space:pre-wrap;word-break:break-word}
+#term .t{color:var(--mut)} #term .ok{color:var(--g)} #term .warn{color:var(--am)} #term .bad{color:var(--rd)} #term .live{color:var(--cy)}
+.scroll{overflow-x:auto;max-height:200px;overflow-y:auto}
+table{width:100%;border-collapse:collapse;font-size:.82rem}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--mut);font-weight:400}
+td:first-child{color:var(--g)}
+.empty{color:var(--mut);font-size:.8rem}
+.people{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--g2);padding:2px 4px 2px 10px;font-size:.8rem;display:flex;align-items:center;gap:4px}
+.chip button{border:0;padding:0 6px;color:var(--rd);font-size:1rem}
+.chip button:hover:not(:disabled){background:transparent;color:#fff;box-shadow:none}
+.hidden{display:none!important}
+.cur::after{content:"_";animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+@media(prefers-reduced-motion:reduce){.sweep,.cur::after,#banner[data-s=bad]{animation:none}#rain{display:none}}
+
+#pipe{list-style:none;margin:10px 0 0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:.76rem;color:var(--mut)}
+#pipe li::before{content:"[ ] ";color:var(--mut)}
+#pipe li.d{color:var(--g)} #pipe li.d::before{content:"[✓] "}
+#pipe li.a{color:var(--cy)} #pipe li.a::before{content:"[>] "}
+#pipe li.f{color:var(--rd)} #pipe li.f::before{content:"[✗] "}
+#reason{min-height:1.3em;margin-top:6px;font-size:.78rem;color:var(--am)}
+#dbg{font-size:.7rem;color:var(--mut);margin-top:4px;word-break:break-word}
+@media(max-width:520px){#pipe{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<canvas id="rain" aria-hidden="true"></canvas>
+<div class="wrap">
+  <header>
+    <h1 data-t="FACEMARK//AUTH">FACEMARK//AUTH<small>BIOMETRIC ATTENDANCE · AI ANTI-SPOOFING</small></h1>
+    <div class="hud">
+      <div class="pill">SYS: <b id="sys">BOOTING</b></div>
+      <div class="pill bad">SPOOFS BLOCKED: <b id="spoofN">0</b></div>
+      <div class="pill">CLOCK: <b id="clock">--:--:--</b></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="box">
+      <h2>SCANNER</h2>
+      <div class="tabs">
+        <button id="tabAttend" class="on">ATTENDANCE</button>
+        <button id="tabRegister">ENROLL FACE</button>
+      </div>
+      <div class="stage">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+        <div class="sweep" id="sweep"></div>
+        <i class="corner c1"></i><i class="corner c2"></i><i class="corner c3"></i><i class="corner c4"></i>
+        <div class="idle-msg" id="idleMsg">[ CAMERA OFFLINE ]<br>Press START CAMERA to initialize scanner</div>
+      </div>
+      <div id="banner" data-s="idle">STANDBY</div>
+      <ol id="pipe"></ol>
+      <div id="reason" aria-live="polite"></div>
+      <div id="dbg"></div>
+      <div id="timebar"></div>
+      <div class="row"><button id="camBtn">START CAMERA</button></div>
+      <div id="registerBox" class="hidden">
+        <div class="row">
+          <input id="nameInput" type="text" placeholder="OPERATOR NAME" aria-label="Operator name" autocomplete="off">
+          <button id="captureBtn" disabled>CAPTURE FACE</button>
+        </div>
+        <div class="note">Enroll in person, facing the camera in good light. Capture 2–3 times from slightly different angles.</div>
+      </div>
+    </section>
+
+    <div class="side">
+      <section class="box">
+        <h2>SYSTEM LOG</h2>
+        <div id="term" role="log" aria-live="polite"></div>
+      </section>
+      <section class="box">
+        <h2>ACCESS LOG — TODAY</h2>
+        <div class="scroll"><table id="todayTable"><thead><tr><th>OPERATOR</th><th>TIME</th></tr></thead><tbody></tbody></table></div>
+        <div id="todayEmpty" class="empty">// no entries yet</div>
+        <div class="row">
+          <button id="csvBtn">EXPORT CSV</button>
+          <button id="clearLogBtn" class="danger">WIPE LOG</button>
+        </div>
+      </section>
+      <section class="box">
+        <h2>SECURITY EVENTS</h2>
+        <div class="scroll"><table id="secTable"><thead><tr><th>TIME</th><th>TYPE</th><th>REASON</th></tr></thead><tbody></tbody></table></div>
+        <div id="secEmpty" class="empty">// no rejected attempts yet (metadata only, no video stored)</div>
+        <div class="row"><button id="secCsvBtn">EXPORT SECURITY LOG</button></div>
+      </section>
+      <section class="box">
+        <h2>ENROLLED OPERATORS</h2>
+        <div id="people" class="people"></div>
+        <div id="peopleEmpty" class="empty">// database empty — use ENROLL FACE</div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+(function (root) {
+  const CFG = {
+    MODEL_URL: 'models/antispoof.onnx',
+    ORT_BASE: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/',
+    MIN_FACE_PX: 90, CROP_EXPANSION: 1.5,
+    PASSIVE_SAMPLES: 6, PASSIVE_GAP_MS: 160,
+    PASSIVE_MIN_MEDIAN: 0.5, PASSIVE_MIN_REAL_RATIO: 0.8,
+    BASELINE_MS: 700, CHALLENGE_COUNT: 3, CHALLENGE_TIMEOUT_MS: 6000,
+    NEUTRAL_HOLD_MS: 400, NEUTRAL_WAIT_MS: 3000, MIN_REACTION_MS: 350, WRONG_HOLD_MS: 300,
+    FROZEN_EPS: 0.03, FROZEN_RUN: 10, TICK_GAP_FAIL_MS: 2000,
+    FAIL_LIMIT: 3, FAIL_WINDOW_MS: 60000, LOCKOUT_MS: 15000, COOLDOWN_MS: 3500
+  };
+  const POOL = {
+    blink:  { label: 'BLINK TWICE' },
+    turnL:  { label: 'TURN HEAD TO YOUR LEFT' },
+    turnR:  { label: 'TURN HEAD TO YOUR RIGHT' },
+    lookUp: { label: 'LOOK UP' },
+    mouth:  { label: 'OPEN YOUR MOUTH' }
+  };
+  const rnd = n => { const a = new Uint32Array(1); root.crypto.getRandomValues(a); return a[0] % n; };
+  function shuffle(arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+  function newChallengeState(id, now) { return { id, phase: 'neutral', tStart: now, nStart: 0, tPrompt: 0, wrongSince: 0, blinks: 0, closed: false, reaction: 0 }; }
+  function makeChallenges(now) { return shuffle(Object.keys(POOL)).slice(0, CFG.CHALLENGE_COUNT).map(id => newChallengeState(id, now)); }
+
+  const median = a => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  function poseMetrics(p) {
+    const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const earOf = e => (d(e[1], e[5]) + d(e[2], e[4])) / (2 * d(e[0], e[3]));
+    const ear = (earOf(p.slice(36, 42)) + earOf(p.slice(42, 48))) / 2;
+    const yaw = (p[30].x - p[0].x) / (p[16].x - p[0].x);
+    const eyeY = (p[36].y + p[39].y + p[42].y + p[45].y) / 4;
+    const pitch = (p[30].y - eyeY) / (p[8].y - eyeY);
+    const mar = d(p[62], p[66]) / d(p[60], p[64]);
+    return { ear, yaw, pitch, mar };
+  }
+  const baselineOf = list => ({ ear: median(list.map(m => m.ear)), yaw: median(list.map(m => m.yaw)), pitch: median(list.map(m => m.pitch)), mar: median(list.map(m => m.mar)) });
+
+  // Directions are in the camera image (unmirrored): the user's LEFT appears on the image's right.
+  function isActive(id, m, b) {
+    if (id === 'turnL') return m.yaw - b.yaw > 0.13;
+    if (id === 'turnR') return m.yaw - b.yaw < -0.13;
+    if (id === 'lookUp') return m.pitch - b.pitch < -0.07;
+    if (id === 'mouth') return m.mar - b.mar > 0.25;
+    return false;
+  }
+  function isWrongPose(id, m, b) {
+    const dy = m.yaw - b.yaw, dp = m.pitch - b.pitch;
+    return (id !== 'turnL' && dy > 0.2) || (id !== 'turnR' && dy < -0.2) || (id !== 'lookUp' && dp < -0.11);
+  }
+  const isNeutral = (m, b) => Math.abs(m.yaw - b.yaw) < 0.07 && Math.abs(m.pitch - b.pitch) < 0.04 && (m.mar - b.mar) < 0.1 && m.ear > 0.8 * b.ear;
+
+  // returns: neutral | prompted | live | done | wrong | toofast | timeout | neutral-timeout
+  function stepChallenge(c, m, b, now) {
+    if (c.phase === 'neutral') {
+      if (isNeutral(m, b)) {
+        if (!c.nStart) c.nStart = now;
+        if (now - c.nStart >= CFG.NEUTRAL_HOLD_MS) { c.phase = 'live'; c.tPrompt = now; c.wrongSince = 0; c.blinks = 0; c.closed = false; return 'prompted'; }
+      } else c.nStart = 0;
+      return now - c.tStart > CFG.NEUTRAL_WAIT_MS ? 'neutral-timeout' : 'neutral';
+    }
+    if (isWrongPose(c.id, m, b)) { if (!c.wrongSince) c.wrongSince = now; else if (now - c.wrongSince >= CFG.WRONG_HOLD_MS) return 'wrong'; } else c.wrongSince = 0;
+    let hit;
+    if (c.id === 'blink') {
+      if (!c.closed && m.ear < 0.65 * b.ear) c.closed = true;
+      else if (c.closed && m.ear > 0.8 * b.ear) { c.closed = false; c.blinks++; }
+      hit = c.blinks >= 2;
+    } else hit = isActive(c.id, m, b);
+    if (hit) { c.reaction = now - c.tPrompt; return c.reaction < CFG.MIN_REACTION_MS ? 'toofast' : 'done'; }
+    return now - c.tPrompt > CFG.CHALLENGE_TIMEOUT_MS ? 'timeout' : 'live';
+  }
+
+  function aggregatePassive(scores) {
+    const n = scores.length; if (!n) return { n: 0, median: -99, realRatio: 0, pass: false };
+    const med = median(scores), ratio = scores.filter(s => s >= 0).length / n;
+    return { n, median: med, realRatio: ratio, pass: n >= CFG.PASSIVE_SAMPLES && med >= CFG.PASSIVE_MIN_MEDIAN && ratio >= CFG.PASSIVE_MIN_REAL_RATIO };
+  }
+
+  // frozen / duplicated frame detector on small grayscale signatures
+  class Replay {
+    constructor() { this.prev = null; this.run = 0; this.maxRun = 0; }
+    pushFrame(sig) {
+      if (this.prev) {
+        let s = 0; for (let i = 0; i < sig.length; i++) s += Math.abs(sig[i] - this.prev[i]);
+        if (s / sig.length < CFG.FROZEN_EPS) this.run++; else this.run = 0;
+        if (this.run > this.maxRun) this.maxRun = this.run;
+      }
+      this.prev = sig;
+    }
+    frozen() { return this.run >= CFG.FROZEN_RUN; }
+  }
+  root.FM = { CFG, POOL, makeChallenges, newChallengeState, poseMetrics, median, baselineOf, isActive, isWrongPose, isNeutral, stepChallenge, aggregatePassive, Replay };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+(() => {
+  const { CFG, POOL, makeChallenges, poseMetrics, baselineOf, stepChallenge, aggregatePassive, Replay, median } = window.FM;
+  const FACE_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model/';
+  const $ = id => document.getElementById(id);
+  const video = $('video'), overlay = $('overlay');
+  const KEY_PEOPLE = 'facemark_people_v1', KEY_LOG = 'facemark_log_v1', KEY_SEC = 'facemark_security_v1';
+  let mode = 'attend', faceReady = false, aiReady = false, camOn = false, loopTimer = null, matcher = null, session = null, busy = false;
+  let cooldownUntil = 0, lockoutUntil = 0, lastTick = 0, spoofs = 0, failTimes = [], S = null;
+  const lastNote = {};
+  const detOpts = () => new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+
+  // ---------- storage (existing keys preserved) ----------
+  const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+  const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { say('STORAGE FULL OR BLOCKED', 'bad'); } };
+  let people = load(KEY_PEOPLE, []), log = load(KEY_LOG, []), secLog = load(KEY_SEC, []);
+  const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const timeStr = () => new Date().toLocaleTimeString([], { hour12: false });
+
+  // ---------- UI helpers ----------
+  function say(msg, cls = '') {
+    const t = $('term'), d = document.createElement('div');
+    d.className = cls; d.innerHTML = '<span class="t">[' + timeStr() + ']</span> ';
+    d.append(document.createTextNode(msg)); t.append(d);
+    while (t.children.length > 80) t.firstChild.remove();
+    t.scrollTop = t.scrollHeight;
+  }
+  const throttleSay = (key, msg, cls, ms = 4000) => { const n = Date.now(); if (!lastNote[key] || n - lastNote[key] > ms) { lastNote[key] = n; say(msg, cls); } };
+  const banner = (text, s = 'idle') => { const b = $('banner'); b.textContent = text; b.dataset.s = s; };
+  const PIPE = ['Face detected', 'Face authenticity (passive AI model)', 'Liveness challenges (random, ordered)', 'Replay analysis', 'Student recognition', 'Duplicate check', 'Attendance marked'];
+  function setPipe(active, failed = -1) {
+    const ol = $('pipe'); ol.innerHTML = '';
+    PIPE.forEach((t, i) => { const li = document.createElement('li'); li.textContent = t; li.className = i === failed ? 'f' : i < active ? 'd' : i === active ? 'a' : ''; ol.append(li); });
+  }
+  setInterval(() => { $('clock').textContent = timeStr(); }, 1000);
+  const dbg = t => { $('dbg').textContent = t; };
+
+  function renderPeople() {
+    const box = $('people'); box.innerHTML = ''; $('peopleEmpty').classList.toggle('hidden', people.length > 0);
+    people.forEach((p, i) => {
+      const c = document.createElement('div'); c.className = 'chip';
+      const s = document.createElement('span'); s.textContent = p.name + ' [' + p.descriptors.length + ']';
+      const b = document.createElement('button'); b.textContent = '×'; b.setAttribute('aria-label', 'Remove ' + p.name);
+      b.onclick = () => { if (confirm('Remove ' + p.name + '?')) { people.splice(i, 1); save(KEY_PEOPLE, people); buildMatcher(); renderPeople(); say('OPERATOR REMOVED: ' + p.name, 'warn'); } };
+      c.append(s, b); box.append(c);
+    });
+  }
+  function renderToday() {
+    const tb = $('todayTable').querySelector('tbody'); tb.innerHTML = '';
+    const rows = log.filter(r => r.date === todayStr()); $('todayEmpty').classList.toggle('hidden', rows.length > 0);
+    rows.forEach(r => { const tr = document.createElement('tr'); [r.name, r.time].forEach(v => { const td = document.createElement('td'); td.textContent = v; tr.append(td); }); tb.append(tr); });
+  }
+  function renderSec() {
+    const tb = $('secTable').querySelector('tbody'); tb.innerHTML = '';
+    $('secEmpty').classList.toggle('hidden', secLog.length > 0);
+    secLog.slice(-6).reverse().forEach(e => {
+      const tr = document.createElement('tr');
+      [new Date(e.ts).toLocaleTimeString([], { hour12: false }), e.type, e.reason].forEach((v, i) => { const td = document.createElement('td'); td.textContent = v; if (i === 1) td.style.color = e.type === 'SPOOF' ? 'var(--rd)' : 'var(--am)'; tr.append(td); });
+      tb.append(tr);
+    });
+  }
+  // security events: metadata only, never images/video
+  function recordEvent(type, reason, stage, extra = {}) {
+    secLog.push({ ts: Date.now(), type, reason, stage, student: extra.student || '', details: extra.details || {} });
+    if (secLog.length > 200) secLog = secLog.slice(-200);
+    save(KEY_SEC, secLog); renderSec();
+  }
+
+  // ---------- recognition ----------
+  function buildMatcher() {
+    const labeled = people.filter(p => p.descriptors.length).map(p => new faceapi.LabeledFaceDescriptors(p.name, p.descriptors.map(d => new Float32Array(d))));
+    matcher = labeled.length ? new faceapi.FaceMatcher(labeled, 0.5) : null;
+  }
+  const alreadyMarked = n => log.some(r => r.name === n && r.date === todayStr());
+
+  // ---------- frame helpers ----------
+  const sigC = document.createElement('canvas'); sigC.width = 32; sigC.height = 24;
+  const sigX = sigC.getContext('2d', { willReadFrequently: true });
+  function frameSig() {
+    sigX.drawImage(video, 0, 0, 32, 24); const d = sigX.getImageData(0, 0, 32, 24).data, s = new Float32Array(768);
+    for (let i = 0; i < 768; i++) s[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2];
+    return s;
+  }
+  const fullC = document.createElement('canvas'), fullX = fullC.getContext('2d', { willReadFrequently: true });
+  const cropC = document.createElement('canvas'), cropX = cropC.getContext('2d');
+  const smC = document.createElement('canvas'); smC.width = 128; smC.height = 128;
+  const smX = smC.getContext('2d', { willReadFrequently: true });
+  // Same preprocessing as the model's reference code: square crop (1.5x box), reflect-101 padding, 128x128, RGB, /255, CHW.
+  function modelInput(box) {
+    const W = video.videoWidth, H = video.videoHeight; fullC.width = W; fullC.height = H; fullX.drawImage(video, 0, 0, W, H);
+    const src = fullX.getImageData(0, 0, W, H).data, m = Math.max(box.width, box.height);
+    const cs = Math.floor(m * CFG.CROP_EXPANSION), x0 = Math.floor(box.x + box.width / 2 - m * CFG.CROP_EXPANSION / 2), y0 = Math.floor(box.y + box.height / 2 - m * CFG.CROP_EXPANSION / 2);
+    const refl = (v, n) => { const p = 2 * (n - 1); v = ((v % p) + p) % p; return v >= n ? p - v : v; };
+    const crop = new ImageData(cs, cs);
+    for (let y = 0; y < cs; y++) { const sy = refl(y0 + y, H) * W; for (let x = 0; x < cs; x++) { const si = (sy + refl(x0 + x, W)) * 4, di = (y * cs + x) * 4; crop.data[di] = src[si]; crop.data[di + 1] = src[si + 1]; crop.data[di + 2] = src[si + 2]; crop.data[di + 3] = 255; } }
+    cropC.width = cs; cropC.height = cs; cropX.putImageData(crop, 0, 0);
+    smX.imageSmoothingEnabled = true; smX.imageSmoothingQuality = 'high'; smX.drawImage(cropC, 0, 0, cs, cs, 0, 0, 128, 128);
+    const d = smX.getImageData(0, 0, 128, 128).data, out = new Float32Array(3 * 128 * 128);
+    for (let i = 0; i < 16384; i++) { out[i] = d[4 * i] / 255; out[16384 + i] = d[4 * i + 1] / 255; out[32768 + i] = d[4 * i + 2] / 255; }
+    return out;
+  }
+  // passive anti-spoofing: logit(real) - logit(spoof); >0 means REAL
+  async function passiveScore(box) {
+    const out = await session.run({ [session.inputNames[0]]: new ort.Tensor('float32', modelInput(box), [1, 3, 128, 128]) });
+    const l = out[session.outputNames[0]].data; return l[0] - l[1];
+  }
+  const conf = s => 1 / (1 + Math.exp(-s));   // logit diff -> probability of REAL
+
+  // ---------- session / pipeline ----------
+  function resetSession() { S = { phase: 'detect', stable: 0, samples: [], lastSample: 0, baseFrames: [], baseT: 0, base: null, ch: [], chi: 0, replay: new Replay(), nameA: null, recog: 0, recogName: null, recogT: 0, lostSince: 0 }; setPipe(0); $('timebar').style.width = '0'; }
+  const STAGE_PIPE = { detect: 0, passive: 1, baseline: 2, challenge: 2, replay: 3, recognize: 4 };
+  function failSession(reason, kind, details = {}) {
+    const spoof = kind === 'spoof', now = Date.now();
+    if (spoof) { spoofs++; $('spoofN').textContent = spoofs; }
+    say((spoof ? 'ALERT: ' : 'REJECTED: ') + reason + ' — attendance NOT saved', spoof ? 'bad' : 'warn');
+    banner(spoof ? 'SPOOF ATTACK DETECTED' : 'VERIFICATION FAILED', spoof ? 'bad' : 'warn'); $('reason').textContent = reason;
+    recordEvent(spoof ? 'SPOOF' : 'FAIL', reason, S.phase, { student: S.nameA && S.nameA !== 'unknown' ? S.nameA : '', details });
+    setPipe(STAGE_PIPE[S.phase] ?? 0, STAGE_PIPE[S.phase] ?? 0);
+    failTimes = failTimes.filter(t => now - t < CFG.FAIL_WINDOW_MS); failTimes.push(now);
+    if (failTimes.length >= CFG.FAIL_LIMIT) { lockoutUntil = performance.now() + CFG.LOCKOUT_MS; failTimes = []; say('TOO MANY FAILED ATTEMPTS — SCANNER LOCKED ' + CFG.LOCKOUT_MS / 1000 + 's', 'bad'); }
+    cooldownUntil = performance.now() + CFG.COOLDOWN_MS;
+    const keep = S; resetSession(); setPipe(STAGE_PIPE[keep.phase] ?? 0, STAGE_PIPE[keep.phase] ?? 0);
+  }
+
+  function bracketBox(ctx, b, color, label) {
+    const l = Math.min(b.width, b.height) * 0.22, { x, y, width: w, height: h } = b;
+    ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.shadowColor = color; ctx.shadowBlur = 10; ctx.beginPath();
+    ctx.moveTo(x, y + l); ctx.lineTo(x, y); ctx.lineTo(x + l, y); ctx.moveTo(x + w - l, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + l);
+    ctx.moveTo(x, y + h - l); ctx.lineTo(x, y + h); ctx.lineTo(x + l, y + h); ctx.moveTo(x + w - l, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - l); ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.font = '600 15px ui-monospace,Menlo,Consolas,monospace'; const tw = ctx.measureText(label).width + 12, ty = Math.max(0, y - 24);
+    ctx.fillStyle = color; ctx.fillRect(x, ty, tw, 22); ctx.fillStyle = '#001520'; ctx.fillText(label, x + 6, ty + 16);
+  }
+
+  async function process() {
+    const ctx = overlay.getContext('2d'); ctx.clearRect(0, 0, overlay.width, overlay.height);
+    const now = performance.now();
+    if (lastTick && now - lastTick > CFG.TICK_GAP_FAIL_MS && S.phase !== 'detect') { lastTick = now; return failSession('CAMERA INTERRUPTED / STALLED', 'fail'); }
+    lastTick = now;
+
+    if (mode === 'register') {
+      const dets = await faceapi.detectAllFaces(video, detOpts()).withFaceLandmarks();
+      dets.forEach(d => bracketBox(ctx, d.detection.box, '#b36bff', 'TARGET'));
+      banner(dets.length === 1 ? 'TARGET LOCKED — READY TO ENROLL' : dets.length ? 'SINGLE TARGET ONLY' : 'ENROLLMENT MODE', dets.length === 1 ? 'live' : 'warn'); return;
+    }
+    if (!aiReady) { banner('ANTI-SPOOF MODEL UNAVAILABLE — ATTENDANCE DISABLED', 'bad'); return; }
+    if (now < lockoutUntil) { banner('SCANNER LOCKED — TOO MANY FAILED ATTEMPTS', 'bad'); return; }
+    if (now < cooldownUntil) return;
+
+    const sig = frameSig(); S.replay.pushFrame(sig);
+    let q = faceapi.detectAllFaces(video, detOpts()).withFaceLandmarks();
+    if (S.phase === 'recognize') q = q.withFaceDescriptors();
+    const dets = await q;
+
+    if (dets.length === 0) {
+      if (!S.lostSince) S.lostSince = now;
+      if (S.phase === 'detect') { banner('DETECTING FACE', 'idle'); S.stable = 0; }
+      else if (now - S.lostSince > 900) failSession('FACE LEFT THE FRAME DURING VERIFICATION', 'fail');
+      return;
+    }
+    S.lostSince = 0;
+    if (dets.length > 1) { dets.forEach(d => bracketBox(ctx, d.detection.box, '#ffc400', 'MULTI')); if (S.phase !== 'detect') return failSession('MULTIPLE FACES IN FRAME', 'fail'); banner('SINGLE PERSON ONLY', 'warn'); S.stable = 0; return; }
+
+    const d = dets[0], box = d.detection.box, m = poseMetrics(d.landmarks.positions);
+    if (S.replay.frozen() && S.phase !== 'detect') return failSession('FROZEN / DUPLICATED VIDEO FRAMES — replay or virtual camera suspected', 'spoof', { frozenRun: S.replay.maxRun });
+    const lum = sig.reduce((a, v) => a + v, 0) / sig.length;
+
+    if (S.phase === 'detect') {
+      if (box.width < CFG.MIN_FACE_PX) { banner('MOVE CLOSER TO THE CAMERA', 'warn'); bracketBox(ctx, box, '#ffc400', 'TOO FAR'); S.stable = 0; return; }
+      if (lum < 35 || lum > 225) { banner('POOR LIGHTING — ADJUST LIGHT', 'warn'); bracketBox(ctx, box, '#ffc400', 'LIGHTING'); S.stable = 0; return; }
+      bracketBox(ctx, box, '#b36bff', 'FACE'); banner('DETECTING FACE', 'live');
+      if (++S.stable >= 6) { S.phase = 'passive'; S.samples = []; S.lastSample = 0; say('FACE LOCKED — CHECKING FACE AUTHENTICITY (passive AI)', 'live'); setPipe(1); }
+      return;
+    }
+
+    if (S.phase === 'passive') {
+      banner('CHECKING FACE AUTHENTICITY', 'live');
+      if (now - S.lastSample >= CFG.PASSIVE_GAP_MS) {
+        S.lastSample = now; const sc = await passiveScore(box); S.samples.push(sc);
+        dbg('auth logit ' + sc.toFixed(2) + ' (' + (conf(sc) * 100).toFixed(0) + '% real) · samples ' + S.samples.length + '/' + CFG.PASSIVE_SAMPLES);
+      }
+      bracketBox(ctx, box, '#b36bff', 'AUTH ' + (S.samples.length ? S.samples[S.samples.length - 1].toFixed(1) : '…'));
+      if (S.samples.length >= CFG.PASSIVE_SAMPLES) {
+        const a = aggregatePassive(S.samples);
+        if (!a.pass) return failSession('PASSIVE ANTI-SPOOF: SPOOF (printed photo / screen) — real-prob ' + (conf(a.median) * 100).toFixed(0) + '%, ' + (a.realRatio * 100).toFixed(0) + '% of samples real', 'spoof', { median: +a.median.toFixed(2), realRatio: a.realRatio });
+        say('AUTHENTICITY: REAL FACE (confidence ' + (conf(a.median) * 100).toFixed(0) + '%)', 'ok'); S.phase = 'baseline'; S.baseT = now; S.baseFrames = []; setPipe(2);
+      }
+      return;
+    }
+
+    if (S.phase === 'baseline') {
+      banner('PERFORMING LIVENESS TEST — LOOK STRAIGHT, STAY STILL', 'live'); bracketBox(ctx, box, '#b36bff', 'CALIBRATING'); S.baseFrames.push(m);
+      if (now - S.baseT >= CFG.BASELINE_MS && S.baseFrames.length >= 4) {
+        S.base = baselineOf(S.baseFrames);
+        const r = await faceapi.detectSingleFace(video, detOpts()).withFaceLandmarks().withFaceDescriptor();
+        S.nameA = r && matcher ? matcher.findBestMatch(r.descriptor).label : 'unknown';
+        S.ch = makeChallenges(now); S.chi = 0; S.phase = 'challenge';
+        say('FRESH CHALLENGE SEQUENCE ISSUED (' + S.ch.length + ' actions, random order)', 'live');
+      }
+      return;
+    }
+
+    if (S.phase === 'challenge') {
+      const c = S.ch[S.chi], st = stepChallenge(c, m, S.base, now);
+      dbg('yaw Δ' + (m.yaw - S.base.yaw).toFixed(2) + ' · pitch Δ' + (m.pitch - S.base.pitch).toFixed(2) + ' · EAR ' + m.ear.toFixed(2) + ' · MAR ' + m.mar.toFixed(2));
+      if (st === 'neutral' || st === 'prompted') {
+        banner('PERFORMING LIVENESS TEST — HOLD STILL, FACE CAMERA', 'live'); bracketBox(ctx, box, '#b36bff', 'STEP ' + (S.chi + 1) + '/' + S.ch.length);
+        if (now - S.lastSample > 450 && c.phase === 'neutral') { S.lastSample = now; S.samples.push(await passiveScore(box)); }
+        if (st === 'prompted') say('CHALLENGE ' + (S.chi + 1) + ': ' + POOL[c.id].label, 'live');
+        return;
+      }
+      if (st === 'live') {
+        banner('VERIFYING CHALLENGE >> ' + POOL[c.id].label + (c.id === 'blink' ? ' (' + c.blinks + '/2)' : ''), 'live');
+        bracketBox(ctx, box, '#b36bff', 'DO: ' + POOL[c.id].label); $('timebar').style.width = Math.max(0, 100 - (now - c.tPrompt) / CFG.CHALLENGE_TIMEOUT_MS * 100) + '%'; return;
+      }
+      const seq = S.ch.map(x => x.id);
+      if (st === 'done') { say('CHALLENGE PASSED: ' + POOL[c.id].label + ' (' + Math.round(c.reaction) + ' ms)', 'ok'); S.chi++; $('timebar').style.width = '0'; if (S.chi >= S.ch.length) { S.phase = 'replay'; } else S.ch[S.chi].tStart = now; return; }
+      if (st === 'wrong') return failSession('CHALLENGE RESPONSE DOES NOT MATCH THE REQUESTED ACTION (' + POOL[c.id].label + ') — pre-recorded video suspected', 'spoof', { seq });
+      if (st === 'toofast') return failSession('RESPONSE FASTER THAN HUMAN REACTION TIME — pre-recorded video suspected', 'spoof', { seq, ms: Math.round(c.reaction) });
+      if (st === 'timeout') return failSession('NO RESPONSE TO CHALLENGE: ' + POOL[c.id].label, 'fail', { seq });
+      if (st === 'neutral-timeout') return failSession('COULD NOT CAPTURE A NEUTRAL POSE — face the camera and stay still', 'fail', { seq });
+      return;
+    }
+
+    if (S.phase === 'replay') {
+      banner('CHECKING REPLAY ATTACK', 'live'); setPipe(3);
+      const a = aggregatePassive(S.samples);
+      if (S.replay.maxRun >= CFG.FROZEN_RUN) return failSession('FROZEN VIDEO FRAMES DETECTED', 'spoof', { frozenRun: S.replay.maxRun });
+      if (!a.pass) return failSession('PASSIVE ANTI-SPOOF FAILED OVER FULL SESSION — real-prob ' + (conf(a.median) * 100).toFixed(0) + '%', 'spoof', { median: +a.median.toFixed(2), realRatio: a.realRatio, n: a.n });
+      S.final = a; say('REPLAY ANALYSIS PASSED (' + a.n + ' auth samples, median real-prob ' + (conf(a.median) * 100).toFixed(0) + '%)', 'ok');
+      S.phase = 'recognize'; S.recogT = now; setPipe(4); return;
+    }
+
+    if (S.phase === 'recognize') {
+      banner('RECOGNIZING STUDENT', 'live'); bracketBox(ctx, box, '#b36bff', 'IDENTIFYING');
+      if (!matcher) return failSession('NO STUDENTS ENROLLED', 'fail');
+      const best = matcher.findBestMatch(d.descriptor);
+      if (best.label === 'unknown') return failSession('UNKNOWN FACE — NOT ENROLLED', 'fail');
+      if (S.nameA && S.nameA !== 'unknown' && best.label !== S.nameA) return failSession('IDENTITY CHANGED DURING VERIFICATION (' + S.nameA + ' → ' + best.label + ')', 'spoof');
+      if (S.nameA === 'unknown') return failSession('UNKNOWN FACE — NOT ENROLLED', 'fail');
+      if (best.label === S.recogName) S.recog++; else { S.recogName = best.label; S.recog = 1; }
+      if (S.recog >= 2) {
+        setPipe(5); const name = best.label;
+        if (alreadyMarked(name)) { say(name + ': ATTENDANCE ALREADY RECORDED TODAY — duplicate blocked', 'warn'); banner('ALREADY MARKED TODAY — ' + name, 'ok'); cooldownUntil = now + CFG.COOLDOWN_MS; resetSession(); return; }
+        log.push({ name, date: todayStr(), time: timeStr(), status: 'VERIFIED', authScore: +conf(S.final.median).toFixed(3) }); save(KEY_LOG, log); renderToday();
+        say('ATTENDANCE MARKED SUCCESSFULLY: ' + name, 'ok'); banner('ATTENDANCE MARKED SUCCESSFULLY — ' + name, 'ok'); $('reason').textContent = '';
+        cooldownUntil = now + CFG.COOLDOWN_MS; resetSession(); setPipe(7);
+      } else if (now - S.recogT > 5000) failSession('COULD NOT RECOGNIZE STUDENT', 'fail');
+    }
+  }
+
+  async function tick() {
+    if (!camOn) return;
+    if (!busy && faceReady && video.readyState >= 2) { busy = true; try { await process(); } catch (e) { console.error(e); } busy = false; }
+    loopTimer = setTimeout(tick, 40);
+  }
+
+  // ---------- camera ----------
+  async function startCam() {
+    try {
+      banner('INITIALIZING CAMERA', 'live');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      video.srcObject = stream; await video.play(); camOn = true; lastTick = 0;
+      stream.getVideoTracks()[0].addEventListener('ended', () => { if (camOn) { if (S) failSession('CAMERA DISCONNECTED', 'fail'); stopCam(); } });
+      $('camBtn').textContent = 'STOP CAMERA'; $('idleMsg').classList.add('hidden');
+      overlay.width = video.videoWidth; overlay.height = video.videoHeight; $('captureBtn').disabled = !(faceReady && aiReady);
+      resetSession(); say('CAMERA ONLINE — SCANNER ACTIVE', 'ok'); tick();
+    } catch (e) { banner('VERIFICATION FAILED', 'warn'); say('CAMERA ERROR — allow permission and use HTTPS', 'bad'); }
+  }
+  function stopCam() {
+    camOn = false; clearTimeout(loopTimer); if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop()); video.srcObject = null;
+    overlay.getContext('2d').clearRect(0, 0, overlay.width, overlay.height); $('camBtn').textContent = 'START CAMERA'; $('captureBtn').disabled = true; $('idleMsg').classList.remove('hidden');
+    resetSession(); banner('STANDBY', 'idle'); say('CAMERA OFFLINE', 'warn');
+  }
+
+  // ---------- enroll (also passes the passive anti-spoof model, so a photo cannot be enrolled) ----------
+  async function capture() {
+    const name = $('nameInput').value.trim(); if (!name) return say('ENTER OPERATOR NAME FIRST', 'warn');
+    const dets = await faceapi.detectAllFaces(video, detOpts()).withFaceLandmarks().withFaceDescriptors();
+    if (dets.length !== 1) return say(dets.length ? 'MULTIPLE FACES — ONE PERSON ONLY' : 'NO FACE FOUND — MOVE CLOSER', 'warn');
+    if (dets[0].detection.box.width < CFG.MIN_FACE_PX) return say('FACE TOO SMALL — MOVE CLOSER', 'warn');
+    const sc = await passiveScore(dets[0].detection.box);
+    if (sc < 0) { recordEvent('SPOOF', 'ENROLLMENT REJECTED: passive anti-spoof says spoof (' + sc.toFixed(1) + ')', 'enroll'); return say('ENROLLMENT REJECTED — NOT A LIVE FACE (' + (conf(sc) * 100).toFixed(0) + '% real)', 'bad'); }
+    let p = people.find(x => x.name.toLowerCase() === name.toLowerCase()); if (!p) { p = { name, descriptors: [] }; people.push(p); }
+    p.descriptors.push(Array.from(dets[0].descriptor)); save(KEY_PEOPLE, people); buildMatcher(); renderPeople();
+    say('FACE CAPTURED: ' + p.name + ' [sample ' + p.descriptors.length + '] — live face confirmed (' + (conf(sc) * 100).toFixed(0) + '%)', 'ok');
+  }
+
+  const esc = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  function dl(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; a.click(); URL.revokeObjectURL(a.href); }
+  $('csvBtn').onclick = () => { if (!log.length) return say('NOTHING TO EXPORT', 'warn'); dl('attendance-' + todayStr() + '.csv', ['Name,Date,Time,Status,AuthScore'].concat(log.map(r => [esc(r.name), r.date, esc(r.time), r.status || '', r.authScore ?? ''].join(','))).join('\n')); say('CSV EXPORTED', 'ok'); };
+  $('secCsvBtn').onclick = () => { if (!secLog.length) return say('NO SECURITY EVENTS', 'warn'); dl('security-events-' + todayStr() + '.csv', ['Timestamp,Type,Stage,Student,Reason'].concat(secLog.map(e => [new Date(e.ts).toISOString(), e.type, esc(e.stage), esc(e.student), esc(e.reason)].join(','))).join('\n')); };
+  $('clearLogBtn').onclick = () => { if (confirm('Delete all attendance records?')) { log = []; save(KEY_LOG, log); renderToday(); say('ACCESS LOG WIPED', 'warn'); } };
+
+  function setMode(m) {
+    mode = m; resetSession(); $('tabAttend').classList.toggle('on', m === 'attend'); $('tabRegister').classList.toggle('on', m === 'register'); $('registerBox').classList.toggle('hidden', m !== 'register');
+    banner(m === 'attend' ? 'STANDBY' : 'ENROLLMENT MODE', 'idle'); say('MODE: ' + (m === 'attend' ? 'ATTENDANCE (anti-spoofing ON)' : 'ENROLLMENT'), 'live');
+  }
+  $('tabAttend').onclick = () => setMode('attend'); $('tabRegister').onclick = () => setMode('register');
+  $('camBtn').onclick = () => camOn ? stopCam() : startCam(); $('captureBtn').onclick = capture;
+
+  // ---------- matrix rain ----------
+  (function rain() {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const c = $('rain'), x = c.getContext('2d'), ch = '01ABCDEF<>/{}[]#$%'.split(''); let cols, drops;
+    const size = () => { c.width = innerWidth; c.height = innerHeight; cols = Math.floor(c.width / 16); drops = Array.from({ length: cols }, () => Math.random() * -50); };
+    size(); addEventListener('resize', size);
+    setInterval(() => { x.fillStyle = 'rgba(2,6,9,.12)'; x.fillRect(0, 0, c.width, c.height); x.fillStyle = '#18c8ff'; x.font = '14px monospace';
+      drops.forEach((y, i) => { x.fillText(ch[Math.floor(Math.random() * ch.length)], i * 16, y * 16); drops[i] = y * 16 > c.height && Math.random() > 0.975 ? 0 : y + 1; }); }, 70);
+  })();
+
+  // ---------- boot ----------
+  (async () => {
+    renderPeople(); renderToday(); renderSec(); resetSession(); say('BOOTING FACEMARK//AUTH …'); say('LOADING FACE + ANTI-SPOOF MODELS …');
+    const jobs = [
+      (async () => { await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(FACE_URL), faceapi.nets.faceLandmark68Net.loadFromUri(FACE_URL), faceapi.nets.faceRecognitionNet.loadFromUri(FACE_URL)]); faceReady = true; buildMatcher(); say('FACE MODELS LOADED — ' + people.length + ' OPERATOR(S) IN DATABASE', 'ok'); })(),
+      (async () => { ort.env.wasm.wasmPaths = CFG.ORT_BASE; ort.env.wasm.numThreads = 1; session = await ort.InferenceSession.create(CFG.MODEL_URL, { executionProviders: ['wasm'] }); aiReady = true; say('ANTI-SPOOF MODEL LOADED (MiniFASNetV2-SE, ONNX)', 'ok'); })()
+    ];
+    const r = await Promise.allSettled(jobs);
+    if (r[0].status === 'rejected') say('FACE MODEL LOAD FAILED — CHECK INTERNET', 'bad');
+    if (r[1].status === 'rejected') say('ANTI-SPOOF MODEL FAILED TO LOAD (' + (r[1].reason && r[1].reason.message || r[1].reason) + ') — ATTENDANCE DISABLED. Serve over http(s) with models/antispoof.onnx next to index.html.', 'bad');
+    $('sys').textContent = faceReady && aiReady ? 'ONLINE' : 'DEGRADED';
+    if (camOn) $('captureBtn').disabled = !(faceReady && aiReady);
+  })();
+})();
+
+</script>
+</body>
+</html>
